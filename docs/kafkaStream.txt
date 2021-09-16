@@ -123,11 +123,95 @@ public class PosListenerService
 
 }
 }
+*****************************************************************************************************
+
+We can also do that
+
+spring:
+  cloud:
+    stream:
+      bindings:
+        notification-input-channel:
+          destination: pos-topic
+        notification-output-channel:
+          destination: loyalty-topic
+        hadoop-input-channel:
+          destination: pos-topic
+        hadoop-output-channel:
+          destination: hadoop-sink-topic
+      kafka:
+        streams:
+          binder:
+            brokers:  192.168.1.127:9092
+            configuration:
+              schema.registry.url: http://192.168.1.127:8081
+          bindings:
+            notification-output-channel:
+              producer:
+                valueSerde: io.confluent.kafka.streams.serdes.avro.SpecificAvroSerde
+            hadoop-output-channel:
+              producer:
+                valueSerde: io.confluent.kafka.streams.serdes.avro.SpecificAvroSerde
 
 
 
 
+public interface PosListenerBinding {
+    @Input("notification-input-channel")
+    KStream<String, PosInvoice> notificationInputStream();
 
+    @Output("notification-output-channel")
+    KStream<String, Notification> notificationOutputStream();
+
+    @Input("hadoop-input-channel")
+    KStream<String, PosInvoice> hadoopInputStream();
+
+    @Output("hadoop-output-channel")
+    KStream<String, HadoopRecord> hadoopOutputStream();
+
+}
+
+@Service
+@Log4j2
+@EnableBinding(PosListenerBinding.class)
+public class HadoopRecordProcessorService {
+    @Autowired
+    RecordBuilder recordBuilder;
+
+    @StreamListener("hadoop-input-channel")
+    @SendTo("hadoop-output-channel")
+    public KStream<String, HadoopRecord> process(KStream<String, PosInvoice> input) {
+
+        KStream<String, HadoopRecord> hadoopRecordKStream = input
+                .mapValues( v -> recordBuilder.getMaskedInvoice(v))
+                .flatMapValues( v -> recordBuilder.getHadoopRecords(v));
+
+        hadoopRecordKStream.foreach((k, v) -> log.info(String.format("Hadoop Record:- Key: %s, Value: %s", k, v)));
+
+        return hadoopRecordKStream;
+    }
+}
+
+@Service
+@Log4j2
+@EnableBinding(PosListenerBinding.class)
+public class NotificationProcessorService {
+    @Autowired
+    RecordBuilder recordBuilder;
+
+    @StreamListener("notification-input-channel")
+    @SendTo("notification-output-channel")
+    public KStream<String, Notification> process(KStream<String, PosInvoice> input) {
+
+        KStream<String, Notification> notificationKStream = input
+                .filter((k, v) -> v.getCustomerType().equalsIgnoreCase("PRIME"))
+                .mapValues(v -> recordBuilder.getNotification(v));
+
+        notificationKStream.foreach((k, v) -> log.info(String.format("Notification:- Key: %s, Value: %s", k, v)));
+
+        return notificationKStream;
+    }
+}
 
 
 
