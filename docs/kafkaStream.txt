@@ -1,0 +1,155 @@
+Kafka Stream Using Spring cloud
+dependency is required 
+	spring-cloud-stream
+	spring for apache kafka stream
+	avro
+	kafka-stream-avro-serde
+	lombok
+*************************************************************	
+	<repositories>		
+		<repository>
+			<id>confluent</id>
+			<url>https://packages.confluent.io/maven/</url>
+		</repository>
+	</repositories>
+	
+	<build>
+		<plugins>
+			<plugin>
+				<groupId>org.springframework.boot</groupId>
+				<artifactId>spring-boot-maven-plugin</artifactId>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.avro</groupId>
+				<artifactId>avro-maven-plugin</artifactId>
+				<version>1.8.2</version>
+				<executions>
+					<execution>
+						<phase>generate-sources</phase>
+						<goals>
+							<goal>schema</goal>
+						</goals>
+						<configuration>
+							<sourceDirectory>src/main/avro</sourceDirectory>
+							<outputDirectory>${project.build.directory}/generated-sources</outputDirectory>
+							<stringType>String</stringType>
+						</configuration>
+					</execution>
+				</executions>
+			</plugin>
+		</plugins>
+	</build>
+	
+	*******************************************************************************
+	create application.yml file 
+	
+	spring:
+  cloud:
+    stream:
+      bindings:
+        pos-input-channel:
+          destination: avro-pos-topic
+      kafka:
+        streams:
+          binder:
+            brokers:  192.168.1.127:9092
+            configuration:
+              schema.registry.url: http://192.168.1.127:8081
+              processing.guarantee: exactly_once
+              default:
+                key:
+                  serde: org.apache.kafka.common.serialization.Serdes$StringSerde
+                value:
+                  serde: io.confluent.kafka.streams.serdes.avro.SpecificAvroSerde
+
+	*******************************************************************************************
+	create avero class
+	
+	{
+  "namespace": "com.invoice.model",
+  "type": "record",
+  "name": "PosInvoice",
+  "fields": [
+    {"name": "InvoiceNumber","type": ["null","string"]},
+    {"name": "CreatedTime","type": ["null","long"]},
+    {"name": "CustomerCardNo","type": ["null","string"]},
+    {"name": "TotalAmount","type": ["null","double"]},
+    {"name": "NumberOfItems","type": ["null","int"]},
+    {"name": "PaymentMethod","type": ["null","string"]},
+    {"name": "TaxableAmount","type": ["null","double"]},
+    {"name": "CGST","type": ["null","double"]},
+    {"name": "SGST","type": ["null","double"]},
+    {"name": "CESS","type": ["null","double"]},
+    {"name": "StoreID","type": ["null","string"]},
+    {"name": "PosID","type": ["null","string"]},
+    {"name": "CashierID","type": ["null","string"]},
+    {"name": "CustomerType","type": ["null","string"]},
+    {"name": "DeliveryType","type": ["null","string"]},
+    {"name": "DeliveryAddress","type": ["null","DeliveryAddress"]},
+    {"name": "InvoiceLineItems","type": {"type": "array", "items": "LineItem"}}
+  ]
+}
+*********************************************************************************************
+Create one interface
+public interface PosListenerBinding {
+    @Input("pos-input-channel")
+    KStream<String, PosInvoice> posInputStream();
+}
+
+#Create service class for implement kstream
+
+@Service
+@Log4j2
+@EnableBinding(PosListenerBinding.class)  // interface class 
+public class PosListenerService
+{
+ @Autowired
+    RecordBuilder recordBuilder; // 
+	
+	
+    @StreamListener("pos-input-channel")  // topic name which is mention in application.yml file
+    public void process(KStream<String, PosInvoice>input){
+        KStream<String, HadoopRecord> hadoopRecordKStream = input
+                .mapValues(v->recordBuilder.getMaskedInvoice(v))
+                .flatMapValues(v->recordBuilder.getHadoopRecords(v));
+        KStream<String, Notification> stringNotificationKStream = input
+                .filter((key, value) ->value.getCustomerType().equalsIgnoreCase("PRIME") )
+                .mapValues(v->recordBuilder.getNotification(v));
+        hadoopRecordKStream.foreach((k,v)->log.info(String.format("Hadoop Record:- Key: %s, Value: %s", k, v)));
+        stringNotificationKStream.foreach((k, v) -> log.info(String.format("Notification:- Key: %s, Value: %s", k, v)));
+
+        hadoopRecordKStream.to("hadoop-sink-topic"); // it will producing on respective topic
+        stringNotificationKStream.to("loyalty-topic"); // it will producing on respective topic
+
+}
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+	
